@@ -42,10 +42,27 @@ if style_image_file:
             frame_display = st.empty()  # Streamlit 顯示區域
             st.info("🚨 Press the 'Stop' button (top-right corner) or close the app window to end.")
 
+            fps_display = st.empty()  # 建立一個可更新區塊
+            prev_time = time.time()
+            frame_count = 0
             while video_capture.isOpened():
                 ret, frame = video_capture.read()
                 if not ret:
                     break
+
+                frame_count += 1
+
+                # 處理與風格轉換...
+                # frame_display.image(...)
+
+                # 每秒更新一次 FPS 顯示
+                current_time = time.time()
+                elapsed = current_time - prev_time
+                if elapsed >= 1.0:
+                    fps = frame_count / elapsed
+                    fps_display.markdown(f"### 🌀 FPS: `{fps:.2f}`")  # 顯示在網頁上
+                    frame_count = 0
+                    prev_time = current_time
 
                 # 預處理每一幀畫面
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
