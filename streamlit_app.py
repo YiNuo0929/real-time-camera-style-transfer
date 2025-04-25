@@ -1,6 +1,5 @@
 import streamlit as st
-import tensorflow as tf
-import tensorflow_hub as hub
+import onnxruntime as ort
 import numpy as np
 import cv2
 import time
@@ -8,43 +7,56 @@ from io import BytesIO
 from PIL import Image
 
 # Streamlit 頁面設定
-st.set_page_config(page_title="🎨 Real-time Style Transfer", layout="wide")
-st.title("🎥 Real-time Neural Style Transfer")
+st.set_page_config(page_title="🎨 Real-time Style Transfer (ONNX)", layout="wide")
+st.title("🎥 Real-time Neural Style Transfer - ONNXRuntime GPU 自動切換版")
 st.markdown("Upload a style image and activate your webcam to apply artistic style in real time!")
 
-# ✅ 快取本地模型（需要 Streamlit v1.18+）
+# ✅ 嘗試建立 GPU Session，若失敗則 fallback 到 CPU
 @st.cache_resource
-def load_style_model():
-    return hub.load('./style_model')  # 本地模型資料夾
+def load_onnx_model():
+    try:
+        session = ort.InferenceSession("stylization.onnx", providers=[
+            "TensorrtExecutionProvider",
+            "CUDAExecutionProvider",
+            "CPUExecutionProvider"
+        ])
+    except Exception as e:
+        st.warning(f"⚠️ GPU/TensorRT unavailable, fallback to CPU. Error: {e}")
+        session = ort.InferenceSession("stylization.onnx", providers=["CPUExecutionProvider"])
+    return session
 
-# 上傳風格圖片
+# 上傳風格圖像
 style_image_file = st.file_uploader("Upload Style Image", type=["jpg", "jpeg", "png"])
 
-# 當使用者上傳風格圖後
 if style_image_file:
     # 處理 style image
     image_data = style_image_file.read()
     image = Image.open(BytesIO(image_data)).convert('RGB')
     style_image = np.array(image).astype(np.float32)[np.newaxis, ...] / 255.
-    style_image = tf.image.resize(style_image, [256, 256])
+    style_image = cv2.resize(style_image[0], (256, 256))
+    style_image = style_image[np.newaxis, ...].astype(np.float32)
 
-    # 載入本地模型
-    with st.spinner("Loading style transfer model..."):
-        hub_module = load_style_model()
-        st.success("✅ 模型已從本地成功載入！")
+    # 載入 ONNX 模型
+    with st.spinner("Loading ONNX model..."):
+        session = load_onnx_model()
+        input_names = [i.name for i in session.get_inputs()]
+        backend = session.get_providers()[0]
+        st.success("✅ ONNX 模型已成功載入！")
+        st.markdown(f"📥 **模型輸入名稱：** `{input_names}`")
+        st.markdown(f"🧠 **使用中的推論後端：** `{backend}`")
 
-    # 啟動即時風格轉換按鈕
     if st.button("🎬 Start Stylization"):
         video_capture = cv2.VideoCapture(0)
         if not video_capture.isOpened():
-            st.error("❌ Cannot access webcam. Please make sure it's connected and not in use.")
+            st.error("❌ Cannot access webcam.")
         else:
-            frame_display = st.empty()  # Streamlit 顯示區域
-            st.info("🚨 Press the 'Stop' button (top-right corner) or close the app window to end.")
+            frame_display = st.empty()
+            fps_display = st.empty()
+            st.info("🚨 Press 'Stop' or close the app window to end.")
 
-            fps_display = st.empty()  # 建立一個可更新區塊
             prev_time = time.time()
             frame_count = 0
+
             while video_capture.isOpened():
                 ret, frame = video_capture.read()
                 if not ret:
@@ -52,30 +64,27 @@ if style_image_file:
 
                 frame_count += 1
 
-                # 處理與風格轉換...
-                # frame_display.image(...)
-
-                # 每秒更新一次 FPS 顯示
+                # FPS 計算
                 current_time = time.time()
                 elapsed = current_time - prev_time
                 if elapsed >= 1.0:
                     fps = frame_count / elapsed
-                    fps_display.markdown(f"### 🌀 FPS: `{fps:.2f}`")  # 顯示在網頁上
+                    fps_display.markdown(f"### 🌀 FPS: `{fps:.2f}`")
                     frame_count = 0
                     prev_time = current_time
 
-                # 預處理每一幀畫面
+                # 預處理內容圖像
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                frame_tensor = tf.image.resize(frame_rgb.astype(np.float32)[np.newaxis, ...] / 255., [256, 256])
+                content_tensor = cv2.resize(frame_rgb, (256, 256))
+                content_tensor = content_tensor.astype(np.float32)[np.newaxis, ...] / 255.
 
-                # 執行風格轉換
-                stylized_output = hub_module(tf.constant(frame_tensor), tf.constant(style_image, dtype=tf.float32))
-                stylized_frame = stylized_output[0].numpy()[0]
-                stylized_frame = (stylized_frame * 255).astype(np.uint8)
+                # ONNX 推論
+                result = session.run(None, {
+                    input_names[0]: content_tensor,
+                    input_names[1]: style_image
+                })
 
-                # 顯示畫面
+                stylized_frame = (result[0][0] * 255).astype(np.uint8)
                 frame_display.image(stylized_frame, channels="RGB", width=512)
-
-                #time.sleep(0.05)  # 可選延遲模擬即時感
 
             video_capture.release()
