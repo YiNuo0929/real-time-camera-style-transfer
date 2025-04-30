@@ -3,8 +3,11 @@ import time
 import numpy as np
 import cv2
 import onnxruntime as ort
-from PyQt5.QtWidgets import QApplication, QLabel, QPushButton, QFileDialog, QVBoxLayout, QWidget, QHBoxLayout
-from PyQt5.QtCore import QTimer
+from PyQt5.QtWidgets import (
+    QApplication, QLabel, QPushButton, QFileDialog,
+    QVBoxLayout, QWidget, QHBoxLayout, QSpacerItem, QSizePolicy
+)
+from PyQt5.QtCore import QTimer, Qt
 from PyQt5.QtGui import QImage, QPixmap
 from PIL import Image
 from hand_tracker import HandTracker
@@ -12,70 +15,117 @@ from hand_tracker import HandTracker
 class StyleTransferApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("🎨 Real-time Neural Style Transfer (PyQt5 + ONNXRuntime)")
-        self.resize(800, 600)
+        self.setWindowTitle("Real-time Neural Style Transfer")
+        self.resize(1000, 700)
 
-        # UI Elements
+        # ====== 樣式設定 ======
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #f0f2f5;
+                font-family: "Helvetica Neue", "Microsoft JhengHei", sans-serif;
+                font-size: 15px;
+                color: #333;
+            }
+            QLabel#titleLabel {
+                font-size: 26px;
+                font-weight: bold;
+                color: #2c3e50;
+            }
+            QLabel#statusLabel {
+                margin-bottom: 10px;
+                font-size: 16px;
+            }
+            QPushButton {
+                background-color: #3498db;
+                color: white;
+                padding: 8px 20px;
+                border: none;
+                border-radius: 6px;
+            }
+            QPushButton:hover {
+                background-color: #2980b9;
+            }
+            QPushButton:disabled {
+                background-color: #bdc3c7;
+            }
+        """)
+
+        # ====== UI 元件 ======
+        self.title = QLabel("🎨 Real-time Neural Style Transfer")
+        self.title.setObjectName("titleLabel")
+        self.title.setAlignment(Qt.AlignCenter)
+
         self.label = QLabel("請上傳一張以上的風格圖片")
-        self.image_label = QLabel()
+        self.label.setObjectName("statusLabel")
+        self.label.setAlignment(Qt.AlignCenter)
 
-        self.upload_btn = QPushButton("📤 上傳多張風格圖片")
+        self.image_label = QLabel()
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setFixedSize(640, 480)
+        self.image_label.setStyleSheet("background-color: white; border: 1px solid #ccc;")
+
+        self.upload_btn = QPushButton("上傳多張風格圖片")
         self.upload_btn.clicked.connect(self.upload_style_images)
 
-        self.start_btn = QPushButton("🎬 開始風格轉換")
+        self.start_btn = QPushButton("開始風格轉換")
         self.start_btn.clicked.connect(self.start_video)
         self.start_btn.setEnabled(False)
 
-        self.next_btn = QPushButton("➡️ 下一張風格")
+        self.next_btn = QPushButton("下一張風格")
         self.next_btn.clicked.connect(self.next_style)
         self.next_btn.setEnabled(False)
 
-        self.stop_btn = QPushButton("⏹ 停止風格轉換")
+        self.stop_btn = QPushButton("停止風格轉換")
         self.stop_btn.clicked.connect(self.stop_video)
         self.stop_btn.setEnabled(False)
 
+        # ====== 版面配置 ======
         button_layout = QHBoxLayout()
+        button_layout.addStretch()
         button_layout.addWidget(self.upload_btn)
         button_layout.addWidget(self.start_btn)
         button_layout.addWidget(self.next_btn)
         button_layout.addWidget(self.stop_btn)
+        button_layout.addStretch()
 
-        layout = QVBoxLayout()
-        layout.addWidget(self.label)
-        layout.addLayout(button_layout)
-        layout.addWidget(self.image_label)
-        self.setLayout(layout)
+        main_layout = QVBoxLayout()
+        main_layout.addWidget(self.title)
+        main_layout.addSpacing(10)
+        main_layout.addWidget(self.label)
+        main_layout.addLayout(button_layout)
+        main_layout.addSpacing(20)
+        main_layout.addWidget(self.image_label, alignment=Qt.AlignCenter)
+        self.setLayout(main_layout)
 
-        # ONNX Session
+        # ====== ONNX 模型與變數 ======
         self.session = self.load_onnx_model()
         self.input_names = [i.name for i in self.session.get_inputs()]
-        self.label.setText(f"✅ 模型已載入，使用: {self.session.get_providers()[0]}")
+        self.label.setText(f" 模型已載入，使用: {self.session.get_providers()[0]}")
 
-        # Video + Timer
+        # ====== 攝影機 + 計時器 ======
         self.capture = None
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
         self.prev_time = time.time()
         self.frame_count = 0
 
-        # 多張風格圖片
+        # ====== 風格圖片 ======
         self.style_images = []
         self.style_names = []
         self.style_index = 0
 
-        # 手勢偵測
+        # ====== 手勢偵測器 ======
         self.hand_tracker = HandTracker()
         self.last_gesture_time = time.time()
         self.cooldown_seconds = 2
 
     def load_onnx_model(self):
         try:
-            session = ort.InferenceSession("stylization.onnx", providers=[
-                "CUDAExecutionProvider",
-                "CPUExecutionProvider"
+            session = ort.InferenceSession("stylization_simplified.onnx", providers=[
+                "CUDAExecutionProvider", "CPUExecutionProvider"
             ])
         except:
-            session = ort.InferenceSession("stylization.onnx", providers=["CPUExecutionProvider"])
+            session = ort.InferenceSession("stylization_simplified.onnx", providers=["CPUExecutionProvider"])
         return session
 
     def upload_style_images(self):
@@ -90,9 +140,8 @@ class StyleTransferApp(QWidget):
                 img_np = np.expand_dims(img_np, axis=0).astype(np.float32)
                 self.style_images.append(img_np)
                 self.style_names.append(file_path.split('/')[-1])
-
             self.style_index = 0
-            self.label.setText(f"✅ 載入 {len(self.style_images)} 張風格圖片 | 當前: {self.style_names[self.style_index]}")
+            self.label.setText(f" 載入 {len(self.style_images)} 張風格圖片 | 當前: {self.style_names[self.style_index]}")
             self.start_btn.setEnabled(True)
             self.next_btn.setEnabled(True)
 
@@ -102,7 +151,7 @@ class StyleTransferApp(QWidget):
             self.label.setText("❌ 無法啟動攝影機")
             return
         self.timer.start(1)
-        self.label.setText(f"🚀 風格轉換進行中... 當前: {self.style_names[self.style_index]}")
+        self.label.setText(f"風格轉換進行中... 當前: {self.style_names[self.style_index]}")
         self.stop_btn.setEnabled(True)
         self.start_btn.setEnabled(False)
         self.upload_btn.setEnabled(False)
@@ -112,7 +161,7 @@ class StyleTransferApp(QWidget):
         if self.capture:
             self.capture.release()
         self.image_label.clear()
-        self.label.setText("🛑 已停止風格轉換，請重新上傳或開始")
+        self.label.setText("已停止風格轉換，請重新上傳或開始")
         self.stop_btn.setEnabled(False)
         self.start_btn.setEnabled(True)
         self.upload_btn.setEnabled(True)
@@ -120,7 +169,7 @@ class StyleTransferApp(QWidget):
     def next_style(self):
         if self.style_images:
             self.style_index = (self.style_index + 1) % len(self.style_images)
-            self.label.setText(f"🎨 目前風格：{self.style_names[self.style_index]}")
+            self.label.setText(f"目前風格：{self.style_names[self.style_index]}")
 
     def update_frame(self):
         ret, frame = self.capture.read()
@@ -132,11 +181,11 @@ class StyleTransferApp(QWidget):
         elapsed = current_time - self.prev_time
         if elapsed >= 1.0:
             fps = self.frame_count / elapsed
-            self.label.setText(f"🎥 FPS: {fps:.2f} | 使用: {self.session.get_providers()[0]} | 當前風格：{self.style_names[self.style_index]}")
+            self.label.setText(f"FPS: {fps:.2f} | 使用: {self.session.get_providers()[0]} | 當前風格：{self.style_names[self.style_index]}")
             self.prev_time = current_time
             self.frame_count = 0
 
-        # 偵測張開手勢並進行切換（加冷卻時間）
+        # 偵測手勢（加上冷卻）
         if time.time() - self.last_gesture_time > self.cooldown_seconds:
             if self.hand_tracker.is_open_hand(frame):
                 self.next_style()
